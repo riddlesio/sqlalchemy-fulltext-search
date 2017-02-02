@@ -12,59 +12,51 @@ from sqlalchemy.sql.expression import ClauseElement
 from . import modes as FullTextMode
 
 
-MYSQL = "mysql"
-MYSQL_BUILD_INDEX_QUERY = u"""ALTER TABLE {0.__tablename__} ADD FULLTEXT ({1})"""
-MYSQL_MATCH_AGAINST = u"""
-                      MATCH ({0})
-                      AGAINST ({1} {2})
-                      """
+MYSQL = 'mysql'
+MYSQL_BUILD_INDEX_QUERY = u'ALTER TABLE {0.__tablename__} ADD FULLTEXT ({1})'
+MYSQL_MATCH_AGAINST = u'MATCH ({0}) AGAINST ({1} {2})'
+
 
 def escape_quote(string):
-    return re.sub(r"[\"\']+", "", string)
+    return re.sub(r'[\"\']+', '', string)
+
 
 class FullTextSearch(ClauseElement):
     """
     Search FullText
     :param against: the search query
-    :param table: the table needs to be query
-
-    FullText support with in query, i.e.
-        >>> from sqlalchemy_fulltext import FullTextSearch
-        >>> session.query(Foo).filter(FullTextSearch('Spam', Foo))
+    :param model: the model to query against
+    :param mode: mode to perform match
     """
     def __init__(self, against, model, mode=FullTextMode.DEFAULT):
-        self.model = model
         self.against = literal(against)
+        self.model = model
         self.mode = mode
 
 
 def get_table_name(element):
-    if hasattr(element.model, "__table__"):
-        return "`" + element.model.__table__.fullname + "`."
-    return ""
+    if hasattr(element.model, '_aliased_insp'):
+        # noinspection PyProtectedMember
+        return '`{}`'.format(element.model._aliased_insp.name)
+    elif hasattr(element.model, '__table__'):
+        return '`{}`'.format(element.model.__table__.fullname)
+    return ''
 
 
 @compiles(FullTextSearch, MYSQL)
 def __mysql_fulltext_search(element, compiler, **kw):
-    assert issubclass(element.model, FullText), "{0} not FullTextable".format(element.model)
+    assert issubclass(element.model, FullText), '{0} not FullTextable'.format(element.model)
+
+    table_name = get_table_name(element)
+    fulltext_columns = element.model.__fulltext_columns__
     return MYSQL_MATCH_AGAINST.format(
-        ", ".join([get_table_name(element) + column for column in element.model.__fulltext_columns__]),
+        ', '.join(['{}.{}'.format(table_name, c) for c in fulltext_columns]),
         compiler.process(element.against),
-        element.mode)
+        element.mode
+    )
 
 
 class FullText(object):
-    """
-    FullText Minxin object for SQLAlchemy
-    
-        >>> from sqlalchemy_fulltext import FullText
-        >>> class Foo(FullText, Base):
-        >>>     __fulltext_columns__ = ('spam', 'ham')
-        >>>     ...
-
-    fulltext search spam and ham now
-    """
-    
     __fulltext_columns__ = tuple()
 
     @classmethod
@@ -74,15 +66,16 @@ class FullText(object):
         """
         if FullText not in cls.__bases__:
             return
-        assert cls.__fulltext_columns__, "Model:{0.__name__} No FullText columns defined".format(cls)
+        assert cls.__fulltext_columns__, 'Model:{0.__name__} No FullText columns defined'.format(cls)
 
-        event.listen(cls.__table__,
-                     'after_create',
-                     DDL(MYSQL_BUILD_INDEX_QUERY.format(cls,
-                         ", ".join((escape_quote(c)
-                                    for c in cls.__fulltext_columns__)))
-                         )
-                     )
+        event.listen(
+            cls.__table__,
+            'after_create',
+            DDL(MYSQL_BUILD_INDEX_QUERY.format(
+                cls,
+                ', '.join((escape_quote(c) for c in cls.__fulltext_columns__))
+            ))
+        )
     """
     TODO: black magic in the future
     @classmethod
